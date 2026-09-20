@@ -8,6 +8,7 @@ video driver so no window opens.
 import pygame
 import pytest
 
+from tests.helpers import park_ball
 from xonix import app as app_module, config
 
 
@@ -28,6 +29,16 @@ def step(app, frames: int, seconds_per_frame: float = 1 / config.TICKS_PER_SECON
         app.handle_events()
         app.update(seconds_per_frame)
         app.draw()
+
+
+def quieten(app) -> None:
+    """Park the balls far away so a scripted hold measures input, not luck.
+
+    A live round has three balls wandering the field, and any of them can cross
+    the trail a test is drawing at any moment. These tests assert which keys
+    move the marker, so the round is made deterministic first.
+    """
+    park_ball(app.game, config.FIELD_WIDTH - 10, config.FIELD_HEIGHT - 10)
 
 
 def test_a_full_session_runs_from_menu_to_result_and_back(app):
@@ -93,3 +104,35 @@ def test_escape_quits_from_the_menu(app):
     app.handle_events()
 
     assert not app.running
+
+
+def test_the_arrows_drive_the_only_marker_of_a_solo_round(app):
+    post_key(app, pygame.KEYDOWN, pygame.K_1)
+    app.handle_events()
+    assert app.state == app_module.PLAY
+    assert len(app.game.players) == 1
+    quieten(app)
+
+    post_key(app, pygame.KEYDOWN, pygame.K_RIGHT)
+    step(app, 90)
+
+    player = app.game.players[0]
+    assert player.x > 0, "the solo marker must answer the second key set too"
+    assert player.lives == config.START_LIVES
+
+
+def test_switching_key_sets_mid_round_keeps_one_marker_in_a_solo_round(app):
+    post_key(app, pygame.KEYDOWN, pygame.K_1)
+    app.handle_events()
+    quieten(app)
+
+    post_key(app, pygame.KEYDOWN, pygame.K_RIGHT)
+    step(app, 30)
+    moved_right = app.game.players[0].x
+    assert moved_right > 0
+
+    post_key(app, pygame.KEYDOWN, pygame.K_s)
+    step(app, 30)
+    player = app.game.players[0]
+    assert player.y > app.game.field.height // 2, "the WASD set took over"
+    assert player.x == moved_right, "the released arrow set must not resume"

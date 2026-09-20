@@ -1,15 +1,21 @@
-"""Keyboard handling: WASD for the first player, arrows for the second.
+"""Keyboard handling: WASD and the arrows, as two switchable key sets.
+
+A key set is a layout, not a player: in a two-player round each player owns one
+set, while a solo round owns both, because the arrows would otherwise be dead
+keys nobody can use.
 
 Direction is direct control: the marker moves while a key is held. Holding keys
 on two axes is a conflict, not a diagonal, so the axis pressed last wins and
-releasing it stops the marker instead of falling back to the other axis.
+releasing it stops the marker instead of falling back to the other axis. The
+same rule spans the sets, so switching from WASD to an arrow mid-hold behaves
+like any other change of axis.
 """
 
 from __future__ import annotations
 
 import pygame
 
-PLAYER_KEYS: tuple[dict[int, tuple[int, int]], ...] = (
+KEY_SETS: tuple[dict[int, tuple[int, int]], ...] = (
     {
         pygame.K_w: (0, -1),
         pygame.K_s: (0, 1),
@@ -33,20 +39,45 @@ VERSUS_KEYS = (pygame.K_2,)
 CONFIRM_KEYS = (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE)
 
 
+def layouts_for_players(
+    player_count: int,
+) -> tuple[tuple[dict[int, tuple[int, int]], ...], ...]:
+    """Which key sets drive each player.
+
+    Two players take one set each, so a key never reaches the other marker. A
+    solo round has no second player to own the second set, so its only marker
+    listens to both and either hand can drive it.
+    """
+    if player_count < 2:
+        return (KEY_SETS,) * max(player_count, 0)
+    return tuple((keys,) for keys in KEY_SETS)
+
+
+def _direction_for(
+    layouts: tuple[dict[int, tuple[int, int]], ...], key: int
+) -> tuple[int, int] | None:
+    for layout in layouts:
+        direction = layout.get(key)
+        if direction is not None:
+            return direction
+    return None
+
+
 class DirectionTracker:
     """Turns key presses and releases into one direction per player."""
 
     def __init__(self, player_count: int = 2) -> None:
         self.player_count = player_count
-        self._active: list[tuple[int, int] | None] = [None] * player_count
+        self._layouts = layouts_for_players(player_count)
+        self._active: list[tuple[int, int] | None] = [None] * len(self._layouts)
         self._key_for_player: dict[int, int] = {}
 
     def direction(self, player_index: int) -> tuple[int, int] | None:
         return self._active[player_index]
 
     def press(self, key: int) -> bool:
-        for index in range(self.player_count):
-            direction = PLAYER_KEYS[index].get(key)
+        for index, layouts in enumerate(self._layouts):
+            direction = _direction_for(layouts, key)
             if direction is not None:
                 self._active[index] = direction
                 self._key_for_player[index] = key
@@ -54,8 +85,8 @@ class DirectionTracker:
         return False
 
     def release(self, key: int) -> bool:
-        for index in range(self.player_count):
-            if PLAYER_KEYS[index].get(key) is None:
+        for index, layouts in enumerate(self._layouts):
+            if _direction_for(layouts, key) is None:
                 continue
             if self._key_for_player.get(index) == key:
                 self._active[index] = None
@@ -64,7 +95,7 @@ class DirectionTracker:
         return False
 
     def clear(self) -> None:
-        self._active = [None] * self.player_count
+        self._active = [None] * len(self._layouts)
         self._key_for_player.clear()
 
 
