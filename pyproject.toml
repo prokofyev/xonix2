@@ -1,0 +1,27 @@
+[project]
+name = "xonix2"
+version = "0.1.0"
+description = "Xonix on pygame for one or two players"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pygame>=2.6.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.9",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint.isort]
+known-first-party = ["xonix", "tests"]
+combine-as-imports = true
