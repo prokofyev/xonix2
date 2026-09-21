@@ -9,6 +9,7 @@ multiples, so one renderer works in a small window and on a large display.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pygame
 
@@ -21,6 +22,16 @@ BALL = (232, 238, 245)
 HUD_TEXT = (226, 232, 240)
 HUD_DIM = (140, 152, 168)
 HUD_BACKDROP = (11, 15, 20)
+# Lives are drawn from a pixel-art heart sprite. The default pygame font has no
+# heart glyph, so a text mark is not an option: it paints an empty box. The
+# sprite is red for both players, since which counter it belongs to is already
+# told by the coloured name in front of it.
+HEART_FILE = Path(__file__).resolve().parent / "assets" / "heart.png"
+# Native size of the sprite, in its own pixels.
+HEART_SIZE = (16, 13)
+# The sprite is scaled by whole pixels only, so the art keeps its blocky edges
+# instead of blurring into a smudge.
+_HEART_CACHE: dict[int, pygame.Surface] = {}
 OWNER_COLORS = (config.WARM, config.COOL)
 # The players are named after their trail colour: the warm one reads red, the
 # cool one reads blue, and the HUD and the result screen must use one name each.
@@ -93,6 +104,37 @@ def compute_layout(window_size: tuple[int, int]) -> Layout:
         small_font=max(18, 3 * scale),
         medium_font=max(28, 4 * scale),
         large_font=max(48, 7 * scale),
+    )
+
+
+def heart_sprite(hud_height: int) -> pygame.Surface:
+    """The heart at the largest whole-pixel scale that still fits the HUD.
+
+    Scaling by an integer keeps pixel art crisp, and the sprite is scaled per
+    HUD height rather than per window, so the hearts grow with the counters on a
+    large display. The surface is cached: the HUD is redrawn every frame.
+    """
+    factor = max(1, (int(hud_height) - 2) // HEART_SIZE[1])
+    cached = _HEART_CACHE.get(factor)
+    if cached is None:
+        source = pygame.image.load(str(HEART_FILE))
+        if pygame.display.get_surface() is not None:
+            source = source.convert_alpha()
+        cached = pygame.transform.scale(
+            source, (HEART_SIZE[0] * factor, HEART_SIZE[1] * factor)
+        )
+        _HEART_CACHE[factor] = cached
+    return cached
+
+
+def lives_size(count: int, heart: pygame.Surface, gap: int) -> tuple[int, int]:
+    """Bounding size of a row of ``count`` hearts separated by ``gap`` pixels."""
+    lives = max(0, int(count))
+    if lives == 0:
+        return 0, heart.get_height()
+    return (
+        lives * heart.get_width() + (lives - 1) * gap,
+        heart.get_height(),
     )
 
 
@@ -242,6 +284,10 @@ class Renderer:
             pygame.font.init()
         self.screen = screen
         self.layout = compute_layout(screen.get_size())
+        self.heart = heart_sprite(self.layout.hud_height)
+        # Hearts nearly touch in the sprite, so a small gap keeps the marks of a
+        # counter apart instead of fusing into one long blob.
+        self.heart_gap = max(1, self.heart.get_width() // 8)
         self.small = pygame.font.Font(None, self.layout.small_font)
         self.medium = pygame.font.Font(None, self.layout.medium_font)
         self.large = pygame.font.Font(None, self.layout.large_font)
@@ -363,11 +409,17 @@ class Renderer:
             label = f"{PLAYER_NAMES[player.owner]} {round(percent):d}%"
             colour = OWNER_COLORS[player.owner % len(OWNER_COLORS)]
             text = self.small.render(label, True, colour)
-            lives = self.small.render("x" * player.lives, True, HUD_TEXT)
-            group = text.get_width() + gap + lives.get_width()
+            lives_width, lives_height = lives_size(player.lives, self.heart, self.heart_gap)
+            group = text.get_width() + gap + lives_width
             left = margin if player.owner == 0 else layout.width - margin - group
             self.screen.blit(text, (left, row))
-            self.screen.blit(lives, (left + text.get_width() + gap, row))
+            heart_left = left + text.get_width() + gap
+            heart_top = (layout.hud_height - lives_height) // 2
+            for index in range(player.lives):
+                self.screen.blit(
+                    self.heart,
+                    (heart_left + index * (self.heart.get_width() + self.heart_gap), heart_top),
+                )
 
     def draw_pause(self) -> None:
         layout = self.layout

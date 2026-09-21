@@ -13,7 +13,15 @@ import pytest
 
 from tests.helpers import carve_land, make_game
 from xonix import config
-from xonix.render import BACKGROUND, OWNER_COLORS, CaptureFlashes, Renderer, compute_layout
+from xonix.render import (
+    BACKGROUND,
+    OWNER_COLORS,
+    PLAYER_NAMES,
+    CaptureFlashes,
+    Renderer,
+    compute_layout,
+    lives_size,
+)
 
 WINDOW = (config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
 
@@ -165,6 +173,100 @@ def test_the_two_players_hud_labels_do_not_overlap(renderer):
         if right - left > layout.width // 4
     ]
     assert gaps, "the two labels should be separated by a wide empty stretch"
+
+
+def hud_heart_rects(renderer, game, owner: int) -> list[tuple[int, int, int, int]]:
+    """The rects the HUD draws this player's hearts into, from the same layout."""
+    layout = renderer.layout
+    font = renderer.small
+    player = game.players[owner]
+    label = f"{PLAYER_NAMES[owner]} {round(100.0 * player.score / game.field.playable_cells):d}%"
+    margin = max(8, 2 * layout.scale)
+    gap = max(8, font.get_height() // 2)
+    width, height = lives_size(player.lives, renderer.heart, renderer.heart_gap)
+    group = font.size(label)[0] + gap + width
+    left = margin if owner == 0 else layout.width - margin - group
+    start = left + font.size(label)[0] + gap
+    top = (layout.hud_height - height) // 2
+    step = renderer.heart.get_width() + renderer.heart_gap
+    return [
+        (start + index * step, top, *renderer.heart.get_size())
+        for index in range(player.lives)
+    ]
+
+
+def heart_ink_colours(renderer) -> set[tuple[int, int, int]]:
+    """The colours the (scaled) sprite paints, for spotting it on the screen."""
+    sprite = renderer.heart
+    return {
+        sprite.get_at((x, y))[:3]
+        for x in range(sprite.get_width())
+        for y in range(sprite.get_height())
+        if sprite.get_at((x, y))[3]
+    }
+
+
+def painted_heart_pixels(renderer, rect) -> int:
+    left, top, width, height = rect
+    inks = heart_ink_colours(renderer)
+    return sum(
+        renderer.screen.get_at((x, y))[:3] in inks
+        for x in range(left, left + width)
+        for y in range(top, top + height)
+    )
+
+
+@pytest.mark.parametrize("window", [(720, 502), (1920, 1338)])
+def test_the_hud_lives_are_painted_hearts(window):
+    """Each life paints a heart sprite, and the sprite is not a solid box."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface(window))
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        game.players[0].lives = 3
+        game.players[1].lives = 1
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        first, second = game.players[0].lives, game.players[1].lives
+        rects = [hud_heart_rects(renderer, game, owner) for owner in (0, 1)]
+        assert len(rects[0]) == first and len(rects[1]) == second
+        for owner in (0, 1):
+            for rect in rects[owner]:
+                assert painted_heart_pixels(renderer, rect) > 0, "a heart is missing"
+            # A solid rectangle would fill all four corners; a heart does not.
+            left, top, _, _ = rects[owner][0]
+            assert renderer.screen.get_at((left, top))[:3] not in heart_ink_colours(renderer)
+        # The two counters stay on their own side of the screen.
+        assert rects[0][-1][0] + rects[0][-1][2] < renderer.layout.width // 2
+        assert rects[1][0][0] >= renderer.layout.width // 2
+    finally:
+        pygame.quit()
+
+
+@pytest.mark.parametrize("window", [(720, 502), (1280, 892), (1920, 1338), (2560, 1784)])
+def test_the_hud_hearts_stay_inside_the_strip_and_off_the_field(window):
+    """The hearts must never spill out of the HUD onto the playable cells."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface(window))
+        layout = renderer.layout
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        assert renderer.heart.get_height() <= layout.hud_height
+        for owner in (0, 1):
+            for left, top, width, height in hud_heart_rects(renderer, game, owner):
+                assert left >= 0 and left + width <= layout.width
+                assert top >= 0 and top + height <= layout.hud_height
+                assert painted_heart_pixels(renderer, (left, top, width, height)) > 0
+        # Nothing may be painted over the top row of playable cells.
+        assert renderer.screen.get_at(layout.cell_point(5, 0))[:3] == BACKGROUND
+    finally:
+        pygame.quit()
 
 
 def test_cells_are_drawn_crisp_without_smoothing(renderer):

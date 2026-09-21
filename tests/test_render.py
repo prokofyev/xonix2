@@ -8,11 +8,17 @@ from xonix import config
 from xonix.core.game import RoundResult
 from xonix.render import (
     BACKGROUND,
+    HEART_FILE,
+    HEART_SIZE,
     HUD_BACKDROP,
+    HUD_TEXT,
     OWNER_COLORS,
+    PLAYER_NAMES,
     CaptureFlashes,
     Renderer,
     compute_layout,
+    heart_sprite,
+    lives_size,
     lives_text,
     lives_word,
     result_lines,
@@ -281,6 +287,70 @@ def hud_shows(renderer, text, colour, left, top) -> bool:
     return bytes(expected.get_view("1")) == bytes(actual.get_view("1"))
 
 
+def heart_asset() -> pygame.Surface:
+    return pygame.image.load(str(HEART_FILE))
+
+
+def heart_ink() -> list[tuple[int, int]]:
+    """The sprite's own pixels that carry art, as (x, y) pairs."""
+    sprite = heart_asset()
+    return [
+        (x, y)
+        for x in range(HEART_SIZE[0])
+        for y in range(HEART_SIZE[1])
+        if sprite.get_at((x, y))[3]
+    ]
+
+
+def heart_colours() -> set[tuple[int, int, int]]:
+    sprite = heart_asset()
+    return {sprite.get_at((x, y))[:3] for x, y in heart_ink()}
+
+
+def heart_red() -> tuple[int, int, int]:
+    """The dominant red of the sprite, for checks that only need "red"."""
+    return max(heart_colours(), key=lambda colour: colour[0])
+
+
+def heart_row(renderer, game, owner: int) -> tuple[int, int]:
+    """Where the HUD puts this player's hearts: left edge and top edge."""
+    layout = renderer.layout
+    player = game.players[owner]
+    label = renderer.small.render(
+        f"{PLAYER_NAMES[owner]} "
+        f"{round(100.0 * player.score / game.field.playable_cells):d}%",
+        True,
+        (0, 0, 0),
+    )
+    margin = max(8, 2 * layout.scale)
+    gap = max(8, renderer.small.get_height() // 2)
+    width, height = lives_size(player.lives, renderer.heart, renderer.heart_gap)
+    group = label.get_width() + gap + width
+    left = margin if owner == 0 else layout.width - margin - group
+    return left + label.get_width() + gap, (layout.hud_height - height) // 2
+
+
+def heart_paint(renderer, rect) -> int:
+    """How many pixels of a rect carry the sprite's own ink colours."""
+    left, top, width, height = rect
+    inks = heart_colours()
+    return sum(
+        renderer.screen.get_at((x, y))[:3] in inks
+        for x in range(left, left + width)
+        for y in range(top, top + height)
+    )
+
+
+def heart_rects(renderer, game, owner: int) -> list[tuple[int, int, int, int]]:
+    """The rect each of this player's hearts is drawn into."""
+    step = renderer.heart.get_width() + renderer.heart_gap
+    left, top = heart_row(renderer, game, owner)
+    return [
+        (left + index * step, top, *renderer.heart.get_size())
+        for index in range(game.players[owner].lives)
+    ]
+
+
 def test_the_hud_names_the_players_by_colour():
     """The counters must read "красный 36%", not "P1 36%"."""
     pygame.init()
@@ -298,15 +368,238 @@ def test_the_hud_names_the_players_by_colour():
         margin = max(8, 2 * layout.scale)
         gap = max(8, font.get_height() // 2)
         # Both labels are laid out exactly as the HUD does: left from the margin,
-        # right aligned against the mirrored margin, each followed by its lives.
-        for owner, label, percent, lives in ((0, "красный", 36, 3), (1, "синий", 32, 3)):
+        # right aligned against the mirrored margin, each followed by its hearts.
+        for owner, label, percent in ((0, "красный", 36), (1, "синий", 32)):
             text = f"{label} {percent}%"
-            lives_width = font.size("x" * lives)[0]
+            lives_width = lives_size(
+                game.players[owner].lives, renderer.heart, renderer.heart_gap
+            )[0]
             group = font.size(text)[0] + gap + lives_width
             left = margin if owner == 0 else layout.width - margin - group
 
             assert hud_shows(renderer, text, OWNER_COLORS[owner], left, row)
             assert not hud_shows(renderer, f"P{owner + 1} {percent}%", OWNER_COLORS[owner],
                                  left, row), "the numeric player label must be gone"
+            assert not hud_shows(renderer, "xxx", HUD_TEXT, left + font.size(text)[0] + gap, row), \
+                "the x marks must be gone"
+    finally:
+        pygame.quit()
+
+
+def test_the_heart_asset_is_a_red_pixel_art_heart():
+    """The sprite must be red, transparent around the art, and heart-shaped.
+
+    This is the guard against the bug that started the change: a heart drawn
+    from a font has no shape and came out as an empty box.
+    """
+    pygame.init()
+    try:
+        sprite = heart_asset()
+        assert sprite.get_size() == HEART_SIZE, "the art must keep its own pixel grid"
+        assert sprite.get_alpha() is not None, "the sprite needs transparency"
+        assert sprite.get_at((0, 0))[3] == 0, "the corners must be transparent"
+
+        ink = [
+            (x, y)
+            for x in range(HEART_SIZE[0])
+            for y in range(HEART_SIZE[1])
+            if sprite.get_at((x, y))[3]
+        ]
+        assert len(ink) < HEART_SIZE[0] * HEART_SIZE[1], "a filled square is not a heart"
+        reds = [colour for colour in heart_colours() if colour[0] > 180]
+        assert reds, "the heart must be red"
+        assert all(colour[0] > colour[1] + 60 for colour in reds), "the ink must read red"
+
+        top = [x for x in range(HEART_SIZE[0]) if sprite.get_at((x, 0))[3]]
+        middle = HEART_SIZE[0] // 2
+        assert middle not in top, "the top of a heart is two lobes, not one bar"
+        assert top[0] == 2 and top[-1] == HEART_SIZE[0] - 3, "the lobes sit at the top corners"
+
+        bottom = [x for x in range(HEART_SIZE[0]) if sprite.get_at((x, HEART_SIZE[1] - 1))[3]]
+        width = lambda y: len([x for x in range(HEART_SIZE[0]) if sprite.get_at((x, y))[3]])
+        assert len(bottom) <= 2, "a heart comes to a point at the bottom"
+        assert width(0) > width(HEART_SIZE[1] - 1), "the art must taper downwards"
+    finally:
+        pygame.quit()
+
+
+def test_the_heart_sprite_scales_by_whole_pixels_only():
+    """Pixel art stays crisp, and the sprite grows with the HUD strip."""
+    pygame.init()
+    try:
+        small = heart_sprite(22)
+        large = heart_sprite(48)
+
+        assert small.get_size() == HEART_SIZE, "the small HUD uses the native art"
+        assert large.get_width() % HEART_SIZE[0] == 0, "the scale must be a whole number"
+        assert large.get_height() == HEART_SIZE[1] * (large.get_width() // HEART_SIZE[0])
+        assert large.get_width() > small.get_width(), "a large HUD gets large hearts"
+        assert small.get_height() <= 22 and large.get_height() <= 48, "the art must fit the HUD"
+        assert heart_sprite(22) is small, "the sprite must be cached between frames"
+    finally:
+        pygame.quit()
+
+
+@pytest.mark.parametrize("lives", [3, 2, 1, 0])
+def test_the_hud_draws_one_heart_per_life(lives):
+    """The counter reads as hearts, and their number is the lives left."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT)))
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        game.players[0].lives = lives
+        game.players[1].lives = lives
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        for owner in (0, 1):
+            rects = heart_rects(renderer, game, owner)
+            assert len(rects) == lives, "one heart per life"
+            for rect in rects:
+                assert heart_paint(renderer, rect) > 0, "a life must paint a heart"
+            if lives == 0:
+                continue
+            # A heart is not a filled box: its top corners carry no ink.
+            left, top, width, _ = rects[0]
+            assert renderer.screen.get_at((left, top))[:3] not in heart_colours()
+            assert renderer.screen.get_at((left + width - 1, top))[:3] not in heart_colours()
+    finally:
+        pygame.quit()
+
+
+def test_the_hud_places_each_heart_where_the_layout_says():
+    """The hearts sit right after their own label, one sprite apart."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT)))
+        layout = renderer.layout
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        game.players[0].lives = 3
+        game.players[1].lives = 2
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        step = renderer.heart.get_width() + renderer.heart_gap
+        inks = heart_ink()
+        for owner in (0, 1):
+            rects = heart_rects(renderer, game, owner)
+            assert len(rects) == game.players[owner].lives
+            for rect in rects:
+                assert heart_paint(renderer, rect) > 0, "a heart is missing from its slot"
+                assert rect[0] >= 0 and rect[0] + rect[2] <= layout.width
+                assert rect[1] >= 0 and rect[1] + rect[3] <= layout.hud_height
+            # The gap between two hearts of one counter must stay empty.
+            for left, top, width, height in rects[:-1]:
+                gap_column = left + width
+                assert not any(
+                    renderer.screen.get_at((gap_column, y))[:3] in inks
+                    for y in range(top, top + height)
+                ), "the hearts of one counter must stay apart"
+            # Both counters must sit on their own side of the screen.
+            middle = layout.width // 2
+            if owner == 0:
+                assert rects[-1][0] + rects[-1][2] < middle, "the counters must not meet"
+            else:
+                assert rects[0][0] >= middle, "the counters must not meet"
+        assert step > renderer.heart.get_width(), "the gap must separate the hearts"
+    finally:
+        pygame.quit()
+
+
+@pytest.mark.parametrize("lives", [3, 2, 1])
+def test_the_counters_keep_their_own_hearts(lives):
+    """The two players may hold different lives; each group stays by its label."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT)))
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        game.players[0].lives = lives
+        game.players[1].lives = config.START_LIVES
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        assert len(heart_rects(renderer, game, 0)) == lives
+        assert len(heart_rects(renderer, game, 1)) == config.START_LIVES
+        for owner in (0, 1):
+            assert all(
+                heart_paint(renderer, rect) > 0
+                for rect in heart_rects(renderer, game, owner)
+            ), "a counter is missing a heart"
+    finally:
+        pygame.quit()
+
+
+def test_the_hud_shows_hearts_instead_of_x_marks():
+    """The old light x marks must be gone, and the hearts are not that mark."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT)))
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=1)
+        game.players[0].lives = 3
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        left, top = heart_row(renderer, game, 0)
+        red = heart_red()
+        assert len(heart_rects(renderer, game, 0)) == 3
+        assert not hud_shows(renderer, "xxx", HUD_TEXT, left, top), "the x marks must be gone"
+        assert not hud_shows(renderer, "xxx", red, left, top), "these are not x marks in red"
+        assert all(
+            heart_paint(renderer, rect) > 0 for rect in heart_rects(renderer, game, 0)
+        )
+        # A heart is not a filled block: its corners are empty, a box would not be.
+        first = heart_rects(renderer, game, 0)[0]
+        assert renderer.screen.get_at((first[0], first[1]))[:3] != red, "a box, not a heart"
+        assert renderer.screen.get_at((first[0] + first[2] - 1, first[1]))[:3] != red
+    finally:
+        pygame.quit()
+
+
+@pytest.mark.parametrize("window", [(720, 502), (1280, 892), (1920, 1338), (2560, 1784)])
+def test_the_hearts_fit_the_hud_at_every_scale(window):
+    """On a big display the hearts must still stay inside the HUD strip."""
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface(window))
+        layout = renderer.layout
+        game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=2)
+        renderer.screen.fill(BACKGROUND)
+
+        renderer.draw_hud(game)
+
+        _, height = lives_size(config.START_LIVES, renderer.heart, renderer.heart_gap)
+        assert height <= layout.hud_height, "the hearts must fit the strip"
+        for owner in (0, 1):
+            rects = heart_rects(renderer, game, owner)
+            assert len(rects) == config.START_LIVES
+            assert rects[0][0] >= 0
+            assert rects[-1][0] + renderer.heart.get_width() <= layout.width
+            for rect in rects:
+                assert rect[1] >= 0 and rect[1] + rect[3] <= layout.hud_height
+                assert heart_paint(renderer, rect) > 0
+    finally:
+        pygame.quit()
+
+
+def test_the_hearts_are_red_and_not_a_player_label_colour():
+    inks = heart_colours()
+    reds = [colour for colour in inks if colour[0] > 180]
+    assert reds, "the heart must carry red pixels"
+    assert all(colour[0] > colour[1] + 60 and colour[0] > colour[2] + 60 for colour in reds)
+    assert all(colour not in OWNER_COLORS for colour in inks), "a heart repeats a label colour"
+    assert HUD_TEXT not in inks and HUD_BACKDROP not in inks
+
+
+def test_lives_size_counts_one_sprite_per_life():
+    pygame.init()
+    try:
+        heart = heart_sprite(22)
+        assert lives_size(0, heart, 3) == (0, heart.get_height())
+        assert lives_size(1, heart, 3) == (heart.get_width(), heart.get_height())
+        assert lives_size(3, heart, 3) == (3 * heart.get_width() + 6, heart.get_height())
     finally:
         pygame.quit()
