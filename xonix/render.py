@@ -55,6 +55,7 @@ class Layout:
     small_font: int
     medium_font: int
     large_font: int
+    score_font: int
 
     def cell_point(self, x: int, y: int) -> tuple[int, int]:
         """Centre of a field cell, in window pixels."""
@@ -104,6 +105,9 @@ def compute_layout(window_size: tuple[int, int]) -> Layout:
         small_font=max(18, 3 * scale),
         medium_font=max(28, 4 * scale),
         large_font=max(48, 7 * scale),
+        # The running versus tally is the biggest mark on the result screen,
+        # so it gets its own step above the headline size.
+        score_font=max(90, 15 * scale),
     )
 
 
@@ -154,6 +158,11 @@ def lives_text(result, solo: bool) -> str:
         f"{PLAYER_NAMES[index]} {count} {lives_word(count)}"
         for index, count in enumerate(counts)
     )
+
+
+def wins_text(wins) -> str:
+    """The versus tally as bare digits, red first: "2:1"."""
+    return f"{int(wins[0])}:{int(wins[1])}"
 
 
 def score_text(result, solo: bool) -> str:
@@ -291,6 +300,7 @@ class Renderer:
         self.small = pygame.font.Font(None, self.layout.small_font)
         self.medium = pygame.font.Font(None, self.layout.medium_font)
         self.large = pygame.font.Font(None, self.layout.large_font)
+        self.score = pygame.font.Font(None, self.layout.score_font)
 
     @property
     def scale(self) -> int:
@@ -458,7 +468,7 @@ class Renderer:
             self.small, HUD_DIM,
         )
 
-    def draw_result(self, game) -> None:
+    def draw_result(self, game, wins=None) -> None:
         layout = self.layout
         self.screen.fill(BACKGROUND)
         result = game.result
@@ -473,6 +483,11 @@ class Renderer:
         self._centre_text(
             lives_text(result, solo), centre - 5 * layout.scale, self.small, HUD_DIM
         )
+        if wins is not None and not solo:
+            # The running tally is a versus feature, so a solo round hides it.
+            # It sits at the very top, large: "red:blue", the order the players
+            # are named everywhere else.
+            self._centre_text(wins_text(wins), 2 * layout.scale, self.score, HUD_TEXT)
         self._centre_text(
             "Enter — в меню    R — ещё раз    F11 — во весь экран",
             centre + 13 * layout.scale,

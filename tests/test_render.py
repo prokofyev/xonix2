@@ -23,6 +23,7 @@ from xonix.render import (
     lives_word,
     result_lines,
     row_runs,
+    wins_text,
 )
 
 
@@ -276,12 +277,12 @@ def test_the_result_shows_how_many_lives_each_player_had_left():
     assert solo == "красный 0 жизней"
 
 
-def hud_shows(renderer, text, colour, left, top) -> bool:
+def hud_shows(renderer, text, colour, left, top, font=None, background=HUD_BACKDROP) -> bool:
     """Is ``text`` in ``colour`` painted at that spot, glyph for glyph?"""
-    font = renderer.small
+    font = font or renderer.small
     width, height = font.size(text)
     expected = pygame.Surface((width, height))
-    expected.fill(HUD_BACKDROP)
+    expected.fill(background)
     expected.blit(font.render(text, True, colour), (0, 0))
     actual = renderer.screen.subsurface(pygame.Rect(left, top, width, height)).copy()
     return bytes(expected.get_view("1")) == bytes(actual.get_view("1"))
@@ -603,3 +604,51 @@ def test_lives_size_counts_one_sprite_per_life():
         assert lives_size(3, heart, 3) == (3 * heart.get_width() + 6, heart.get_height())
     finally:
         pygame.quit()
+
+
+def test_the_tally_is_bare_digits_red_then_blue():
+    assert wins_text((0, 0)) == "0:0"
+    assert wins_text((2, 1)) == "2:1"
+    assert wins_text((5, 3)) == "5:3"
+
+
+def finish_versus_game(player_count=2):
+    game = make_game(width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=player_count)
+    game.players[0].lives = 0
+    game.players[0].alive = False
+    game.tick()
+    return game
+
+
+def tally_spot(renderer, text):
+    """Where the top-of-screen tally is centred, as the app draws it."""
+    layout = renderer.layout
+    width = renderer.score.size(text)[0]
+    return (layout.width - width) // 2, 2 * layout.scale
+
+
+def test_the_result_screen_shows_the_tally_large_at_the_top(surface):
+    renderer = Renderer(surface)
+    game = finish_versus_game()
+
+    renderer.draw_result(game, [2, 1])
+
+    text = wins_text((2, 1))
+    left, top = tally_spot(renderer, text)
+    assert hud_shows(renderer, text, HUD_TEXT, left, top, renderer.score, BACKGROUND), \
+        "the versus result must show the running tally at the top"
+    assert renderer.score.size(text)[1] > renderer.large.size(text)[1], \
+        "the tally must be larger than the result headline"
+    assert top < renderer.layout.height // 4, "the tally must sit near the top of the screen"
+
+
+def test_the_solo_result_screen_has_no_tally(surface):
+    renderer = Renderer(surface)
+    game = finish_versus_game(player_count=1)
+
+    renderer.draw_result(game, [3, 0])
+
+    text = wins_text((3, 0))
+    left, top = tally_spot(renderer, text)
+    assert not hud_shows(renderer, text, HUD_TEXT, left, top, renderer.score, BACKGROUND), \
+        "a solo round must not show a win tally"

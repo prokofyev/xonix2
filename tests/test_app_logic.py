@@ -112,3 +112,107 @@ def test_flashes_expire(app):
     app.flashes.update(config.CAPTURE_FLASH_SECONDS + 0.01)
 
     assert app.flashes.active_cells() == []
+
+
+def finish_round(app, winner, kind="target"):
+    """Force the round in progress to end with a chosen result."""
+    from xonix.core.game import RoundResult
+
+    scores = (1000, 900) if winner == 0 else (900, 1000)
+    percents = (56.0, 21.0) if winner == 0 else (21.0, 56.0)
+    if winner is None:
+        scores, percents = (1000, 1000), (35.0, 35.0)
+    app.game.result = RoundResult(kind, winner, scores, percents, (3, 3))
+    app.game.state = "finished"
+
+
+def test_the_win_tally_starts_at_zero(app):
+    assert app.win_counts == [0, 0]
+
+
+def test_a_versus_round_credits_the_winner_once(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=1)
+
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.state == app_module.RESULT
+    assert app.win_counts == [0, 1]
+
+
+def test_later_frames_do_not_credit_the_win_again(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=0)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    for _ in range(5):
+        app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.win_counts == [1, 0]
+
+
+def test_a_win_on_lives_counts_the_same_as_a_win_on_points(app):
+    app._key_down(pygame.K_2)
+    app.game.players[1].lives = 0
+    app.game.players[1].alive = False
+
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.game.result.kind == "lives"
+    assert app.game.result.winner == 0
+    assert app.win_counts == [1, 0]
+
+
+def test_a_draw_leaves_the_tally_alone(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=None)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.game.result.winner is None
+    assert app.win_counts == [0, 0]
+
+
+def test_wins_accumulate_across_rounds(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=0)
+    app.update(1 / config.TICKS_PER_SECOND)
+    app._key_down(pygame.K_r)
+
+    finish_round(app, winner=1)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.win_counts == [1, 1]
+
+
+def test_a_new_match_from_the_menu_resets_the_tally(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=1)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    app._key_down(pygame.K_ESCAPE)
+    app._key_down(pygame.K_2)
+
+    assert app.win_counts == [0, 0]
+
+
+def test_restarting_the_round_keeps_the_tally(app):
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=0)
+    app.update(1 / config.TICKS_PER_SECOND)
+    app._key_down(pygame.K_ESCAPE)
+    app._key_down(pygame.K_2)
+    finish_round(app, winner=1)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    app._key_down(pygame.K_r)
+
+    assert app.win_counts == [0, 1]
+
+
+def test_a_solo_round_never_touches_the_tally(app):
+    app._key_down(pygame.K_1)
+    finish_round(app, winner=0)
+    app.update(1 / config.TICKS_PER_SECOND)
+
+    assert app.state == app_module.RESULT
+    assert app.win_counts == [0, 0]

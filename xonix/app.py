@@ -42,6 +42,9 @@ class App:
         self.state = MENU
         self.paused = False
         self.running = True
+        # Wins counted per colour for the current session of versus play. The
+        # core models one round, so a running tally belongs to the shell.
+        self.win_counts = [0, 0]
 
     def _create_surface(self, screen: pygame.Surface | None) -> pygame.Surface:
         if screen is not None:
@@ -59,7 +62,11 @@ class App:
         self.screen = self._create_surface(None)
         self.renderer.set_screen(self.screen)
 
-    def start_round(self, player_count: int) -> None:
+    def start_round(self, player_count: int, reset_wins: bool = False) -> None:
+        if reset_wins:
+            # A fresh match from the menu starts the tally over. A restart of
+            # the round keeps it, so the players can continue their series.
+            self.win_counts = [0, 0]
         self.player_count = player_count
         self.game = Game(player_count=player_count, seed=None)
         self.tracker = game_input.DirectionTracker(player_count=player_count)
@@ -102,16 +109,16 @@ class App:
             if game_input.is_menu(key):
                 self.running = False
             elif game_input.is_solo(key):
-                self.start_round(1)
+                self.start_round(1, reset_wins=True)
             elif game_input.is_versus(key):
-                self.start_round(2)
+                self.start_round(2, reset_wins=True)
             return
 
         if self.state == RESULT:
             if game_input.is_menu(key) or game_input.is_confirm(key):
                 self.state = MENU
             elif game_input.is_restart(key):
-                self.start_round(self.player_count)
+                self.start_round(self.player_count, reset_wins=False)
             return
 
         if game_input.is_menu(key):
@@ -122,7 +129,7 @@ class App:
             self.paused = not self.paused
             return
         if game_input.is_restart(key):
-            self.start_round(self.player_count)
+            self.start_round(self.player_count, reset_wins=False)
             return
         if not self.paused:
             self.tracker.press(key)
@@ -140,7 +147,23 @@ class App:
             game.tick()
             self._flash_captures()
         if game.state == "finished":
+            # update() only runs while the state is PLAY, so this is the single
+            # PLAY -> RESULT transition: the win is credited exactly once.
+            self._record_win(game)
             self.state = RESULT
+
+    def _record_win(self, game: Game) -> None:
+        """Credit one win per finished versus round, and none on a draw.
+
+        A round won on points and one won by outlasting the rival both count the
+        same; only a defined winner scores, so a draw leaves the tally alone.
+        Solo play has no rival to beat, so it never touches the tally.
+        """
+        if self.player_count < 2 or game.result is None:
+            return
+        winner = game.result.winner
+        if winner is not None:
+            self.win_counts[winner] += 1
 
     def _flash_captures(self) -> None:
         """One flash entry per player per tick, not per captured cell.
@@ -161,7 +184,7 @@ class App:
         if self.state == MENU:
             self.renderer.draw_menu()
         elif self.state == RESULT and self.game is not None:
-            self.renderer.draw_result(self.game)
+            self.renderer.draw_result(self.game, self.win_counts)
         elif self.game is not None:
             self.renderer.draw_game(self.game, self.flashes)
             if self.paused:
