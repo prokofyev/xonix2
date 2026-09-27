@@ -142,24 +142,6 @@ def lives_size(count: int, heart: pygame.Surface, gap: int) -> tuple[int, int]:
     )
 
 
-def lives_word(count: int) -> str:
-    """Russian plural for a life count: 1 жизнь, 2 жизни, 5 жизней."""
-    if count % 10 == 1 and count % 100 != 11:
-        return "жизнь"
-    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
-        return "жизни"
-    return "жизней"
-
-
-def lives_text(result, solo: bool) -> str:
-    """Remaining lives of each player, e.g. "красный 3 жизни   синий 0 жизней"."""
-    counts = result.lives[: 1 if solo else 2]
-    return "   ".join(
-        f"{PLAYER_NAMES[index]} {count} {lives_word(count)}"
-        for index, count in enumerate(counts)
-    )
-
-
 def wins_text(wins) -> str:
     """The versus tally as bare digits, red first: "2:1"."""
     return f"{int(wins[0])}:{int(wins[1])}"
@@ -468,6 +450,37 @@ class Renderer:
             self.small, HUD_DIM,
         )
 
+    def result_lives_rows(self, result, solo: bool):
+        """Where each player's colour label and heart row go on the result screen.
+
+        One entry per player in the round: the owner, the rendered colour label,
+        the label's left edge, the heart row's left edge, and the row's top edge.
+        Every row is centred on its own, so a label always travels with its own
+        hearts and the two counters never drift together. The result screen
+        reuses the HUD sprite, so the hearts read the same at the end of a round
+        as during it.
+        """
+        layout = self.layout
+        owners = list(range(1 if solo else 2))
+        gap = max(8, self.small.get_height() // 2)
+        row_gap = max(4, self.small.get_height() // 4)
+        heart_h = self.heart.get_height()
+        block_h = len(owners) * heart_h + (len(owners) - 1) * row_gap
+        # The block sits where the old lives line used to: just under the
+        # percentage line, centred vertically around it.
+        block_top = layout.height // 2 - 5 * layout.scale - block_h // 2
+        rows = []
+        for index, owner in enumerate(owners):
+            label = self.small.render(
+                PLAYER_NAMES[owner], True, OWNER_COLORS[owner % len(OWNER_COLORS)]
+            )
+            hearts_w = lives_size(result.lives[owner], self.heart, self.heart_gap)[0]
+            group = label.get_width() + gap + hearts_w
+            left = (layout.width - group) // 2
+            row_top = block_top + index * (heart_h + row_gap)
+            rows.append((owner, label, left, left + label.get_width() + gap, row_top))
+        return rows
+
     def draw_result(self, game, wins=None) -> None:
         layout = self.layout
         self.screen.fill(BACKGROUND)
@@ -480,9 +493,14 @@ class Renderer:
         self._centre_text(headline, centre - 25 * layout.scale, self.large, HUD_TEXT)
         if score is not None:
             self._centre_text(score, centre - 12 * layout.scale, self.medium, HUD_TEXT)
-        self._centre_text(
-            lives_text(result, solo), centre - 5 * layout.scale, self.small, HUD_DIM
-        )
+        for owner, label, label_left, heart_left, row_top in self.result_lives_rows(result, solo):
+            # The colour label stays even at zero lives: it names the counter.
+            self.screen.blit(
+                label, (label_left, row_top + (self.heart.get_height() - label.get_height()) // 2)
+            )
+            step = self.heart.get_width() + self.heart_gap
+            for index in range(result.lives[owner]):
+                self.screen.blit(self.heart, (heart_left + index * step, row_top))
         if wins is not None and not solo:
             # The running tally is a versus feature, so a solo round hides it.
             # It sits at the very top, large: "red:blue", the order the players

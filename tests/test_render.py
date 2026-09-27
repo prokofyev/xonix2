@@ -11,6 +11,7 @@ from xonix.render import (
     HEART_FILE,
     HEART_SIZE,
     HUD_BACKDROP,
+    HUD_DIM,
     HUD_TEXT,
     OWNER_COLORS,
     PLAYER_NAMES,
@@ -19,8 +20,6 @@ from xonix.render import (
     compute_layout,
     heart_sprite,
     lives_size,
-    lives_text,
-    lives_word,
     result_lines,
     row_runs,
     wins_text,
@@ -257,24 +256,6 @@ def test_the_solo_result_names_the_reason_without_a_second_player():
     assert reached_score is None
     assert defeated == "У красного кончились жизни"
     assert defeated_score == "10%", "a solo defeat still shows how far the player got"
-
-
-def test_the_life_count_declines_correctly():
-    assert lives_word(1) == "жизнь"
-    assert lives_word(2) == "жизни"
-    assert lives_word(3) == "жизни"
-    assert lives_word(5) == "жизней"
-    assert lives_word(0) == "жизней"
-    assert lives_word(11) == "жизней"
-    assert lives_word(21) == "жизнь"
-
-
-def test_the_result_shows_how_many_lives_each_player_had_left():
-    both = lives_text(result("target", 0, (56.5, 20.6), lives=(3, 1)), solo=False)
-    solo = lives_text(result("defeat", None, (9.8, 0.0), lives=(0, 0)), solo=True)
-
-    assert both == "красный 3 жизни   синий 1 жизнь"
-    assert solo == "красный 0 жизней"
 
 
 def hud_shows(renderer, text, colour, left, top, font=None, background=HUD_BACKDROP) -> bool:
@@ -652,3 +633,130 @@ def test_the_solo_result_screen_has_no_tally(surface):
     left, top = tally_spot(renderer, text)
     assert not hud_shows(renderer, text, HUD_TEXT, left, top, renderer.score, BACKGROUND), \
         "a solo round must not show a win tally"
+
+
+def finished_game(lives, player_count=2, winner=0):
+    """A game whose round is over, with the given lives left per player."""
+    game = make_game(
+        width=config.FIELD_WIDTH, height=config.FIELD_HEIGHT, player_count=player_count
+    )
+    percents = (56.0, 21.0) if player_count >= 2 else (54.0, 0.0)
+    game.result = RoundResult("target", winner, (1000, 900), percents, tuple(lives))
+    game.state = "finished"
+    return game
+
+
+def result_heart_rects(renderer, game):
+    """Every heart the result screen draws, per owner."""
+    solo = game.player_count < 2
+    step = renderer.heart.get_width() + renderer.heart_gap
+    rects = {}
+    for owner, _label, _label_left, heart_left, row_top in renderer.result_lives_rows(
+        game.result, solo
+    ):
+        size = renderer.heart.get_size()
+        rects[owner] = [
+            (heart_left + index * step, row_top, *size)
+            for index in range(game.result.lives[owner])
+        ]
+    return rects
+
+
+def test_the_result_screen_draws_one_heart_per_life_left(surface):
+    renderer = Renderer(surface)
+    game = finished_game(lives=(2, 0))
+
+    renderer.draw_result(game, [1, 0])
+
+    rects = result_heart_rects(renderer, game)
+    assert len(rects[0]) == 2, "red had two lives left, so two hearts"
+    assert rects[1] == [], "blue had none, so no hearts"
+    assert all(heart_paint(renderer, rect) > 0 for rect in rects[0]), \
+        "the hearts must be painted from the sprite"
+
+
+def test_the_result_screen_does_not_spell_lives_as_words(surface):
+    """The life counters read as hearts; the numbered phrasing must be gone.
+
+    The check scans the band where the lives line used to sit: that is where a
+    regression would draw the numbers, and a bounded scan keeps it fast.
+    """
+    renderer = Renderer(surface)
+    game = finished_game(lives=(3, 0))
+
+    renderer.draw_result(game, [1, 0])
+
+    layout = renderer.layout
+    rows = renderer.result_lives_rows(game.result, solo=False)
+    top = min(row_top for _o, _l, _ll, _hl, row_top in rows)
+    bottom = max(row_top for _o, _l, _ll, _hl, row_top in rows) + renderer.heart.get_height()
+    colours = (*OWNER_COLORS, HUD_DIM, HUD_TEXT)
+    for phrase in ("3 жизни", "1 жизнь", "0 жизней", "3 жизней"):
+        width, height = renderer.small.size(phrase)
+        found = any(
+            hud_shows(renderer, phrase, colour, x, y, renderer.small, BACKGROUND)
+            for colour in colours
+            for y in range(top, min(bottom, layout.height - height) + 1)
+            for x in range(layout.width - width + 1)
+        )
+        assert not found, f"the result screen must not spell lives: {phrase!r}"
+
+
+def test_the_result_screen_keeps_the_colour_label_at_zero_lives(surface):
+    renderer = Renderer(surface)
+    game = finished_game(lives=(0, 3))
+
+    renderer.draw_result(game, [0, 1])
+
+    for owner, _label, label_left, heart_left, row_top in renderer.result_lives_rows(
+        game.result, solo=False
+    ):
+        assert hud_shows(
+            renderer,
+            PLAYER_NAMES[owner],
+            OWNER_COLORS[owner],
+            label_left,
+            row_top + (renderer.heart.get_height() - renderer.small.get_height()) // 2,
+            renderer.small,
+            BACKGROUND,
+        ), "every counter keeps its colour label, even at zero lives"
+        assert heart_left >= label_left
+
+
+def test_the_solo_result_screen_shows_hearts_for_the_single_player(surface):
+    renderer = Renderer(surface)
+    game = finished_game(lives=(2,), player_count=1, winner=0)
+
+    renderer.draw_result(game)
+
+    rects = result_heart_rects(renderer, game)
+    assert list(rects) == [0], "a solo round draws a counter only for its single player"
+    assert len(rects[0]) == 2, "two lives left, so two hearts"
+    assert all(heart_paint(renderer, rect) > 0 for rect in rects[0])
+
+
+@pytest.mark.parametrize("window", [(720, 502), (1280, 892), (1920, 1338)])
+def test_the_result_hearts_fit_the_window_at_every_scale(window):
+    pygame.init()
+    try:
+        renderer = Renderer(pygame.Surface(window))
+        layout = renderer.layout
+        game = finished_game(lives=(3, 3))
+
+        renderer.draw_result(game, [2, 1])
+
+        rows = renderer.result_lives_rows(game.result, solo=False)
+        for owner, _label, label_left, heart_left, row_top in rows:
+            assert label_left >= 0, "the counter must not spill off the left edge"
+            step = renderer.heart.get_width() + renderer.heart_gap
+            count = game.result.lives[owner]
+            right = heart_left + count * step - renderer.heart_gap
+            assert right <= layout.width, "the heart row must fit the window width"
+            assert row_top >= 0
+            assert row_top + renderer.heart.get_height() <= layout.height
+        tops = [row_top for _o, _l, _ll, _hl, row_top in rows]
+        assert tops[0] != tops[1], "the two counters must not sit on the same line"
+        assert abs(tops[0] - tops[1]) >= renderer.heart.get_height(), \
+            "the counters must not overlap"
+    finally:
+        pygame.quit()
