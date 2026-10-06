@@ -88,8 +88,18 @@ class Game:
         self._pending.clear()
 
     def _move_markers(self) -> list[Player]:
+        # Decide every marker against the tick's starting state. Applying moves
+        # as we go would let the first marker paint a trail the second steps onto
+        # in the same tick; judging markers by the cell they commit to also
+        # survives the one-tick phase offset between move intervals, so a
+        # head-on meeting kills both however the intervals line up.
+        collided = self._collided_markers()
+
         landed: list[Player] = []
-        for player in self.players:
+        for index, player in enumerate(self.players):
+            if index in collided:
+                player.alive = False
+                continue
             if not player.ready_to_move():
                 continue
             target = player.step_target()
@@ -102,9 +112,9 @@ class Game:
             x, y = target
             cell = self.field.state(x, y)
             if cell == State.TRAIL:
-                # A marker that steps onto any trail dies: its own trail means a
-                # 180 degree turn, someone else's trail is a rival mine. The
-                # owner of that trail is not credited and keeps it.
+                # A marker that steps onto a trail dies unless that step is a
+                # collision: its own trail means a 180 degree turn, a rival's is
+                # a mine. The owner is not credited and keeps it.
                 player.alive = False
                 continue
             player.move_to(x, y)
@@ -116,6 +126,43 @@ class Game:
                 player.anchor = (x, y)
                 landed.append(player)
         return landed
+
+    def _collided_markers(self) -> set[int]:
+        """Indices of markers meeting on a non-land cell this tick.
+
+        Only steered markers take part, so a stopped marker is never killed by
+        someone walking into it; that step costs only the mover, exactly as the
+        trail rule says. Two steered markers collide when the cells they commit
+        to coincide (a head-on meeting, together or one tick apart) or when they
+        trade cells (a pass-through). Land is exempt, so markers may share it.
+        """
+        collided: set[int] = set()
+        steered = [
+            index
+            for index, player in enumerate(self.players)
+            if player.direction is not None
+            and self.field.in_bounds(*player.step_target())
+        ]
+        for position, first_index in enumerate(steered):
+            first = self.players[first_index]
+            first_end = first.step_target()
+            for second_index in steered[position + 1 :]:
+                second = self.players[second_index]
+                second_end = second.step_target()
+                if first_end == second_end:
+                    if not self.field.is_land(*first_end):
+                        collided.add(first_index)
+                        collided.add(second_index)
+                    continue
+                if (
+                    first_end == (second.x, second.y)
+                    and second_end == (first.x, first.y)
+                    and not self.field.is_land(*first_end)
+                    and not self.field.is_land(*second_end)
+                ):
+                    collided.add(first_index)
+                    collided.add(second_index)
+        return collided
 
     def _move_balls(self) -> None:
         for ball in self.balls:

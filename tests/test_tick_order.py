@@ -97,3 +97,30 @@ def test_a_landing_player_is_credited_before_the_round_check():
     assert game.result is not None
     assert game.result.kind == "target"
     assert game.result.winner == 0
+
+
+def test_two_markers_trading_cells_collide():
+    """Swapping adjacent cells is a pass-through meeting, so both markers die.
+
+    This is the same geometry as a head-on meeting whose intervals are one tick
+    out of phase, so treating it as anything but a collision would let that
+    phase lets one player through.
+    """
+    game = make_game(width=40, height=24, player_count=2)
+    game.balls = []
+    first, second = game.players
+    first.x, first.y = 10, 12
+    first.anchor = (10, 12)
+    second.x, second.y = 11, 12
+    second.anchor = (11, 12)
+
+    game.set_direction(0, (1, 0))
+    game.set_direction(1, (-1, 0))
+    run(game, config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES - 1
+    assert second.lives == config.START_LIVES - 1
+    assert (first.x, first.y) == (10, 12)
+    assert (second.x, second.y) == (11, 12)
+    assert game.field.state(10, 12) == State.SEA
+    assert game.field.state(11, 12) == State.SEA

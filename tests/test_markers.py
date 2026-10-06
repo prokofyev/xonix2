@@ -124,3 +124,111 @@ def test_two_markers_can_share_a_land_cell():
 
     assert (first.x, first.y) == (second.x, second.y)
     assert game.state == "playing"
+
+
+def test_two_markers_entering_one_sea_cell_both_die():
+    """A contested sea cell kills both markers, whoever moved first."""
+    game = quiet_game(player_count=2)
+    first, second = game.players
+    first.x, first.y = 10, 12
+    first.anchor = (10, 12)
+    second.x, second.y = 12, 12
+    second.anchor = (12, 12)
+
+    game.set_direction(0, (1, 0))
+    game.set_direction(1, (-1, 0))
+    run(game, config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES - 1
+    assert second.lives == config.START_LIVES - 1
+    assert game.field.state(11, 12) == State.SEA
+    assert (first.x, first.y) == (10, 12)
+    assert (second.x, second.y) == (12, 12)
+    assert first.trail == [] and second.trail == []
+    assert first.score == 0 and second.score == 0
+    assert game.state == "playing"
+
+
+def test_sea_cell_collision_does_not_depend_on_player_number():
+    """Swapping the roles gives the same symmetric outcome."""
+    game = quiet_game(player_count=2)
+    first, second = game.players
+    first.x, first.y = 12, 12
+    first.anchor = (12, 12)
+    second.x, second.y = 10, 12
+    second.anchor = (10, 12)
+
+    game.set_direction(0, (-1, 0))
+    game.set_direction(1, (1, 0))
+    run(game, config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES - 1
+    assert second.lives == config.START_LIVES - 1
+    assert game.field.state(11, 12) == State.SEA
+    assert (first.x, first.y) == (12, 12)
+    assert (second.x, second.y) == (10, 12)
+
+
+def test_a_contested_land_cell_lets_both_markers_through():
+    """Land is not contested: two markers may enter the same land cell in one tick."""
+    game = quiet_game(player_count=2)
+    first, second = game.players
+    carve_land(game.field, [(11, 12)])
+    first.x, first.y = 10, 12
+    first.anchor = (10, 12)
+    second.x, second.y = 12, 12
+    second.anchor = (12, 12)
+
+    game.set_direction(0, (1, 0))
+    game.set_direction(1, (-1, 0))
+    run(game, config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES
+    assert second.lives == config.START_LIVES
+    assert (first.x, first.y) == (11, 12)
+    assert (second.x, second.y) == (11, 12)
+
+
+def test_a_contested_trail_cell_keeps_its_owner():
+    """Two markers piling onto one existing trail cell: both die, the trail stays."""
+    game = quiet_game(player_count=2)
+    game.field.set_trail(11, 12, owner=1)
+    first, second = game.players
+    first.x, first.y = 10, 12
+    first.anchor = (10, 12)
+    second.x, second.y = 12, 12
+    second.anchor = (12, 12)
+
+    game.set_direction(0, (1, 0))
+    game.set_direction(1, (-1, 0))
+    run(game, config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES - 1
+    assert second.lives == config.START_LIVES - 1
+    assert game.field.state(11, 12) == State.TRAIL
+    assert game.field.owner_at(11, 12) == 1
+
+
+def test_a_phase_offset_head_on_still_kills_both_markers():
+    """Markers one tick out of step must not split a head-on into a lone death.
+
+    The intervals are offset so red paints the middle cell a tick before blue
+    reaches it. Reading that as an ordinary trail step would kill only blue,
+    which is exactly the phase-driven half of the head-on bug.
+    """
+    game = quiet_game(player_count=2)
+    first, second = game.players
+    first.x, first.y = 10, 12
+    first.anchor = (10, 12)
+    second.x, second.y = 12, 12
+    second.anchor = (12, 12)
+    first.accumulator = 1
+    second.accumulator = 0
+
+    game.set_direction(0, (1, 0))
+    game.set_direction(1, (-1, 0))
+    run(game, 2 * config.PLAYER_TICKS_PER_CELL)
+
+    assert first.lives == config.START_LIVES - 1
+    assert second.lives == config.START_LIVES - 1
+    assert game.field.state(11, 12) == State.SEA
